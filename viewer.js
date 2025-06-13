@@ -17,6 +17,7 @@
     const THREADS_KEY = 'otkActiveThreads';
     const MESSAGES_KEY = 'otkMessagesByThreadId';
     const COLORS_KEY = 'otkThreadColors';
+    const SELECTED_MESSAGE_KEY = 'otkSelectedMessageId';
 
     // Decode HTML entities utility
     function decodeEntities(encodedString) {
@@ -62,6 +63,20 @@
         document.body.appendChild(viewer);
     }
 
+    // Inject CSS for selected messages
+    if (!document.getElementById('otk-viewer-styles')) {
+        const styleSheet = document.createElement("style");
+        styleSheet.id = 'otk-viewer-styles';
+        styleSheet.type = "text/css";
+        styleSheet.innerText = `
+            .selected-message {
+                background-color: #E0E0E0 !important;
+                box-shadow: 0 0 5px rgba(0,0,0,0.3) !important;
+            }
+        `;
+        document.head.appendChild(styleSheet);
+    }
+
     // Helper: Find message by post id across all threads
     function findMessage(postId) {
         for (const threadId of activeThreads) {
@@ -88,6 +103,31 @@
         // container.style.marginLeft = `${depth * 20}px`; // Removed to align all messages
         if (depth === 0) {
             container.style.backgroundColor = '#fff';
+            container.dataset.messageId = msg.id; // Set data-message-id for top-level messages
+
+            // Add click event listener for selection
+            container.addEventListener('click', function(event) {
+                const currentSelectedId = localStorage.getItem(SELECTED_MESSAGE_KEY);
+                const thisMessageId = String(msg.id); // Ensure string comparison
+
+                // Deselect if clicking the already selected message
+                if (currentSelectedId === thisMessageId) {
+                    localStorage.removeItem(SELECTED_MESSAGE_KEY);
+                    this.classList.remove('selected-message');
+                } else {
+                    // Remove highlight from previously selected message
+                    const previouslySelected = viewer.querySelector('.selected-message');
+                    if (previouslySelected) {
+                        previouslySelected.classList.remove('selected-message');
+                    }
+
+                    // Store new selected message ID and highlight it
+                    localStorage.setItem(SELECTED_MESSAGE_KEY, thisMessageId);
+                    this.classList.add('selected-message');
+                }
+                event.stopPropagation(); // Stop event from bubbling
+            });
+
         } else {
             // Alternating backgrounds for quoted messages
             container.style.backgroundColor = (depth % 2 === 1) ? 'rgba(0,0,0,0.05)' : '#fff';
@@ -246,6 +286,7 @@
         // Render all messages
         allMessages.forEach(msg => {
             const msgEl = renderMessageWithQuotes(msg, msg.threadId);
+            // Selection class is now primarily handled by restoreSelectedMessageState upon loading all messages
             viewer.appendChild(msgEl);
         });
 
@@ -269,6 +310,32 @@
                 }
             });
         });
+
+        return restoreSelectedMessageState(); // Call and return status
+    }
+
+    // Function to restore selected message state and scroll
+    function restoreSelectedMessageState() {
+        const selectedId = localStorage.getItem(SELECTED_MESSAGE_KEY);
+        if (selectedId) {
+            // Clear any existing selected message highlight first
+            // This is important if a message was selected, then the page was reloaded,
+            // and renderAllMessages initially added the class, but a *different* message
+            // was clicked before this function runs (e.g. due to an update event).
+            // Or, if the user manually removed the class via devtools and then an update happens.
+            const previouslySelectedViewerHighlight = viewer.querySelector('.selected-message');
+            if (previouslySelectedViewerHighlight) {
+                previouslySelectedViewerHighlight.classList.remove('selected-message');
+            }
+
+            const selectedElement = viewer.querySelector(`[data-message-id="${selectedId}"]`);
+            if (selectedElement) {
+                selectedElement.classList.add('selected-message');
+                selectedElement.scrollIntoView({ behavior: 'auto', block: 'center' });
+                return true; // Message found and scrolled to
+            }
+        }
+        return false; // No selected ID or element not found
     }
 
     // Toggle viewer display
@@ -354,10 +421,13 @@
             messagesByThreadId = JSON.parse(localStorage.getItem(MESSAGES_KEY)) || {};
             threadColors = JSON.parse(localStorage.getItem(COLORS_KEY)) || {};
 
-            renderAllMessages();
+            const scrolledToSelected = renderAllMessages(); // renderAllMessages now returns status
 
-            // Restore scroll position
-            viewer.scrollTop = lastScrollTop;
+            // If restoreSelectedMessageState (called within renderAllMessages)
+            // did NOT find and scroll to a selected message, then restore the previous scroll position.
+            if (!scrolledToSelected) {
+                viewer.scrollTop = lastScrollTop;
+            }
         }
     });
 
